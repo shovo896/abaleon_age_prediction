@@ -7,7 +7,6 @@ from sklearn.preprocessing import OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
-import xgboost as xgb
 from xgboost import XGBRegressor
 
 # %%
@@ -60,7 +59,7 @@ cat_cols = X.select_dtypes(exclude="number").columns.tolist()
 # %%
 # Preprocessor factory (fit only on training fold each time)
 
-def build_preprocessor(X_fit: pd.DataFrame) -> ColumnTransformer:
+def build_preprocessor() -> ColumnTransformer:
     numeric_transformer = Pipeline(steps=[
         ("imputer", SimpleImputer(strategy="median")),
     ])
@@ -78,7 +77,7 @@ def build_preprocessor(X_fit: pd.DataFrame) -> ColumnTransformer:
 xgb_params = dict(
     objective="reg:absoluteerror",
     tree_method="hist",
-    n_estimators=4000,
+    n_estimators=1400,
     learning_rate=0.03,
     max_depth=7,
     min_child_weight=1,
@@ -92,53 +91,34 @@ xgb_params = dict(
 )
 
 # %%
-# CV with early stopping to estimate best number of trees
+# CV to estimate MAE
 kf = KFold(n_splits=5, shuffle=True, random_state=42)
 maes = []
-best_iters = []
 
 for fold, (tr_idx, va_idx) in enumerate(kf.split(X), 1):
     X_tr, X_va = X.iloc[tr_idx], X.iloc[va_idx]
     y_tr, y_va = y.iloc[tr_idx], y.iloc[va_idx]
 
-    pre = build_preprocessor(X_tr)
-    X_tr_t = pre.fit_transform(X_tr)
-    X_va_t = pre.transform(X_va)
-
+    pre = build_preprocessor()
     model = XGBRegressor(**xgb_params)
-    model.fit(
-        X_tr_t,
-        y_tr,
-        eval_set=[(X_va_t, y_va)],
-        verbose=False,
-        callbacks=[xgb.callback.EarlyStopping(rounds=200, save_best=True)],
-    )
-
-    pred = model.predict(X_va_t)
+    pipe = Pipeline([("preprocess", pre), ("model", model)])
+    pipe.fit(X_tr, y_tr)
+    pred = pipe.predict(X_va)
     mae = mean_absolute_error(y_va, pred)
     maes.append(mae)
-    best_iters.append(model.best_iteration)
 
-    print(f"Fold {fold} MAE: {mae:.6f}, best_iter: {model.best_iteration}")
+    print(f"Fold {fold} MAE: {mae:.6f}")
 
 print(f"CV MAE mean: {np.mean(maes):.6f}")
 print(f"CV MAE std : {np.std(maes):.6f}")
-print(f"Mean best_iter: {int(np.mean(best_iters))}")
 
 # %%
-# Train final model on full data using averaged best iteration
-best_n_estimators = int(np.mean(best_iters))
-
-final_pre = build_preprocessor(X)
-X_all = final_pre.fit_transform(X)
-X_test_t = final_pre.transform(X_test)
-
-final_model = XGBRegressor(
-    **{**xgb_params, "n_estimators": best_n_estimators}
-)
-final_model.fit(X_all, y)
-
-test_pred = final_model.predict(X_test_t)
+# Train final model on full data
+final_pre = build_preprocessor()
+final_model = XGBRegressor(**xgb_params)
+final_pipe = Pipeline([("preprocess", final_pre), ("model", final_model)])
+final_pipe.fit(X, y)
+test_pred = final_pipe.predict(X_test)
 
 submission = pd.DataFrame({
     ID_COL: test[ID_COL],
