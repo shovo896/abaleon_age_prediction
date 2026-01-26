@@ -7,6 +7,7 @@ from sklearn.preprocessing import OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
+import xgboost as xgb
 from xgboost import XGBRegressor
 
 # %%
@@ -110,7 +111,7 @@ for fold, (tr_idx, va_idx) in enumerate(kf.split(X), 1):
         y_tr,
         eval_set=[(X_va_t, y_va)],
         verbose=False,
-        early_stopping_rounds=200,
+        callbacks=[xgb.callback.EarlyStopping(rounds=200, save_best=True)],
     )
 
     pred = model.predict(X_va_t)
