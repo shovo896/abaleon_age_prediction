@@ -1,0 +1,7 @@
+﻿# Core
+pandas>=1.5
+numpy>=1.23
+scikit-learn>=1.2
+
+# UI
+gradio>=4.0
