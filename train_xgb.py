@@ -7,6 +7,7 @@ from sklearn.preprocessing import OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
+from sklearn.ensemble import RandomForestRegressor
 from xgboost import XGBRegressor
 
 # %%
@@ -59,13 +60,20 @@ cat_cols = X.select_dtypes(exclude="number").columns.tolist()
 # %%
 # Preprocessor factory (fit only on training fold each time)
 
+def build_onehot() -> OneHotEncoder:
+    try:
+        return OneHotEncoder(handle_unknown="ignore", sparse_output=False)
+    except TypeError:
+        return OneHotEncoder(handle_unknown="ignore", sparse=False)
+
+
 def build_preprocessor() -> ColumnTransformer:
     numeric_transformer = Pipeline(steps=[
         ("imputer", SimpleImputer(strategy="median")),
     ])
     categorical_transformer = Pipeline(steps=[
         ("imputer", SimpleImputer(strategy="most_frequent")),
-        ("onehot", OneHotEncoder(handle_unknown="ignore"))
+        ("onehot", build_onehot())
     ])
     return ColumnTransformer([
         ("num", numeric_transformer, num_cols),
@@ -91,6 +99,19 @@ xgb_params = dict(
 )
 
 # %%
+rf_params = dict(
+    n_estimators=800,
+    max_depth=None,
+    min_samples_leaf=1,
+    n_jobs=-1,
+    random_state=42,
+)
+
+# %%
+W_XGB = 0.7
+W_RF = 0.3
+
+# %%
 # CV to estimate MAE
 kf = KFold(n_splits=5, shuffle=True, random_state=42)
 maes = []
@@ -100,10 +121,18 @@ for fold, (tr_idx, va_idx) in enumerate(kf.split(X), 1):
     y_tr, y_va = y.iloc[tr_idx], y.iloc[va_idx]
 
     pre = build_preprocessor()
-    model = XGBRegressor(**xgb_params)
-    pipe = Pipeline([("preprocess", pre), ("model", model)])
-    pipe.fit(X_tr, y_tr)
-    pred = pipe.predict(X_va)
+    X_tr_t = pre.fit_transform(X_tr)
+    X_va_t = pre.transform(X_va)
+
+    xgb = XGBRegressor(**xgb_params)
+    rf = RandomForestRegressor(**rf_params)
+
+    xgb.fit(X_tr_t, y_tr)
+    rf.fit(X_tr_t, y_tr)
+
+    pred_xgb = xgb.predict(X_va_t)
+    pred_rf = rf.predict(X_va_t)
+    pred = (W_XGB * pred_xgb) + (W_RF * pred_rf)
     mae = mean_absolute_error(y_va, pred)
     maes.append(mae)
 
@@ -115,10 +144,16 @@ print(f"CV MAE std : {np.std(maes):.6f}")
 # %%
 # Train final model on full data
 final_pre = build_preprocessor()
-final_model = XGBRegressor(**xgb_params)
-final_pipe = Pipeline([("preprocess", final_pre), ("model", final_model)])
-final_pipe.fit(X, y)
-test_pred = final_pipe.predict(X_test)
+X_all = final_pre.fit_transform(X)
+X_test_t = final_pre.transform(X_test)
+
+final_xgb = XGBRegressor(**xgb_params)
+final_rf = RandomForestRegressor(**rf_params)
+
+final_xgb.fit(X_all, y)
+final_rf.fit(X_all, y)
+
+test_pred = (W_XGB * final_xgb.predict(X_test_t)) + (W_RF * final_rf.predict(X_test_t))
 
 submission = pd.DataFrame({
     ID_COL: test[ID_COL],
